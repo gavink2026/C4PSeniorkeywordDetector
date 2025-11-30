@@ -1,6 +1,6 @@
 import { KeywordScanner } from './scanner';
 import { AIClassifier } from './aiWrapper';
-import { CombinedAnalysis, MessageFromContent, Severity, StoredAnalysis } from './types';
+import { CombinedAnalysis, MessageFromContent, DetectionResult, AIVerdict, Severity, StoredAnalysis } from './types';
 
 const scanner = new KeywordScanner();
 const aiClassifier = new AIClassifier();
@@ -9,200 +9,140 @@ let lastAnalysis: CombinedAnalysis | null = null;
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: 'scanText',
-    title: 'Scan for Scams',
+    title: 'Scan for scams',
     contexts: ['selection']
   });
 
   chrome.storage.local.set({
-    scanHistory: [],
-    totalScans: 0,
-    scamsDetected: 0
+    analysisHistory: [],
+    settingsInitialized: true,
+    mockMode: true
   });
 });
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === 'scanText' && info.selectionText && tab?.id) {
-    analyzeText(info.selectionText, 'selection');
+    analyzeText(info.selectionText, 'selection', tab.id);
   }
 });
 
-chrome.runtime.onMessage.addListener((message: MessageFromContent, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message: MessageFromContent | any, sender, sendResponse) => {
   if (message.type === 'ANALYZE_TEXT') {
-    analyzeText(message.text, message.source).then(analysis => {
-      sendResponse({ success: true, analysis });
-    }).catch(error => {
-      sendResponse({ success: false, error: error.message });
-    });
-    return true;
-  }
-
-  if (message.type === 'GET_LAST_ANALYSIS') {
+    handleAnalyzeRequest(message.text, message.source, sender.tab?.id);
+  } else if (message.type === 'GET_LAST_ANALYSIS') {
     sendResponse({ analysis: lastAnalysis });
-    return true;
-  }
-
-  if (message.type === 'GET_SCAN_HISTORY') {
-    chrome.storage.local.get(['scanHistory'], (result) => {
-      sendResponse({ history: result.scanHistory || [] });
+  } else if (message.type === 'GET_HISTORY') {
+    chrome.storage.local.get(['analysisHistory'], (result) => {
+      sendResponse({ history: result.analysisHistory || [] });
     });
     return true;
-  }
-
-  if (message.type === 'CLEAR_HISTORY') {
-    chrome.storage.local.set({ scanHistory: [], totalScans: 0, scamsDetected: 0 }, () => {
+  } else if (message.type === 'CLEAR_HISTORY') {
+    chrome.storage.local.set({ analysisHistory: [] }, () => {
       sendResponse({ success: true });
     });
     return true;
   }
-
-  if (message.type === 'GET_STATS') {
-    chrome.storage.local.get(['totalScans', 'scamsDetected'], (result) => {
-      sendResponse({ 
-        totalScans: result.totalScans || 0,
-        scamsDetected: result.scamsDetected || 0
-      });
-    });
-    return true;
-  }
+  return true;
 });
 
-async function analyzeText(text: string, source: 'selection' | 'input'): Promise<CombinedAnalysis> {
-  const keywordResult = scanner.scan(text);
-  const aiResult = await aiClassifier.classifyWithAI(text);
-  
-  const keywordScore = normalizeScore(keywordResult.score);
-  const aiScore = aiResult.confidence;
-  const combinedScore = (keywordScore * 0.6) + (aiScore * 0.4);
-  
-  const isSuspicious = combinedScore >= 0.5 || keywordResult.severity === 'critical' || aiResult.isSuspicious;
-  const overallSeverity = determineOverallSeverity(keywordResult.severity, aiResult.isSuspicious, combinedScore);
-  const recommendation = generateRecommendation(isSuspicious, overallSeverity, keywordResult, aiResult);
+async function handleAnalyzeRequest(text: string, source: 'selection' | 'input', tabId?: number): Promise<void> {
+  await analyzeText(text, source, tabId);
+}
 
-  const analysis: CombinedAnalysis = {
+async function analyzeText(text: string, source: string, tabId?: number): Promise<void> {
+  try {
+    const keywordResult: DetectionResult = scanner.scan(text);
+    const aiResult: AIVerdict = await aiClassifier.classifyWithAI(text);
+    
+    const analysis: CombinedAnalysis = combineResults(keywordResult, aiResult, text);
+    lastAnalysis = analysis;
+    
+    await saveToHistory(analysis);
+    
+    if (analysis.isSuspicious && analysis.overallSeverity !== 'low') {
+      showNotification(analysis);
+    }
+    
+    chrome.runtime.sendMessage({
+      type: 'ANALYSIS_COMPLETE',
+      analysis: analysis
+    });
+    
+  } catch (error) {
+    console.error('Analysis error:', error);
+  }
+}
+
+function combineResults(keywordResult: DetectionResult, aiResult: AIVerdict, text: string): CombinedAnalysis {
+  const keywordScore = keywordResult.score;
+  const aiScore = aiResult.confidence * 100;
+  const finalScore = (keywordScore * 0.6) + (aiScore * 0.4);
+  
+  const isSuspicious = keywordResult.flagged || aiResult.isSuspicious;
+  
+  let overallSeverity: Severity = 'low';
+  if (keywordResult.severity === 'critical' || (aiResult.isSuspicious && aiResult.confidence > 0.8)) {
+    overallSeverity = 'critical';
+  } else if (keywordResult.severity === 'high' || (aiResult.isSuspicious && aiResult.confidence > 0.6)) {
+    overallSeverity = 'high';
+  } else if (keywordResult.severity === 'medium' || aiResult.isSuspicious) {
+    overallSeverity = 'medium';
+  }
+  
+  let recommendation = '';
+  if (overallSeverity === 'critical') {
+    recommendation = '🚨 DANGER: This is very likely a scam. Do NOT respond or provide any information.';
+  } else if (overallSeverity === 'high') {
+    recommendation = '⚠️ HIGH RISK: This message shows many signs of a scam. Be extremely cautious.';
+  } else if (overallSeverity === 'medium') {
+    recommendation = '⚡ CAUTION: This message has some suspicious elements. Verify before taking action.';
+  } else {
+    recommendation = '✅ This message appears safe, but always stay vigilant.';
+  }
+  
+  return {
     isSuspicious,
     overallSeverity,
     keywordDetection: keywordResult,
     aiDetection: aiResult,
-    finalScore: combinedScore,
+    finalScore,
     recommendation,
     timestamp: Date.now(),
     messageText: text
   };
-
-  lastAnalysis = analysis;
-
-  if (isSuspicious) {
-    showNotification(overallSeverity);
-  }
-
-  saveToHistory(analysis);
-  updateStats(isSuspicious);
-
-  return analysis;
 }
 
-function normalizeScore(rawScore: number): number {
-  const maxExpectedScore = 200;
-  return Math.min(rawScore / maxExpectedScore, 1.0);
+async function saveToHistory(analysis: CombinedAnalysis): Promise<void> {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['analysisHistory'], (result) => {
+      const history: StoredAnalysis[] = result.analysisHistory || [];
+      const storedAnalysis: StoredAnalysis = {
+        ...analysis,
+        id: Date.now().toString() + Math.random().toString(36)
+      };
+      history.unshift(storedAnalysis);
+      if (history.length > 100) {
+        history.pop();
+      }
+      chrome.storage.local.set({ analysisHistory: history }, () => {
+        resolve();
+      });
+    });
+  });
 }
 
-function determineOverallSeverity(keywordSeverity: Severity, aiSuspicious: boolean, score: number): Severity {
-  if (keywordSeverity === 'critical' || (aiSuspicious && score >= 0.8)) {
-    return 'critical';
-  }
-  if (keywordSeverity === 'high' || (aiSuspicious && score >= 0.6)) {
-    return 'high';
-  }
-  if (keywordSeverity === 'medium' || score >= 0.4) {
-    return 'medium';
-  }
-  return 'low';
-}
-
-function generateRecommendation(isSuspicious: boolean, severity: Severity, keywordResult: any, aiResult: any): string {
-  if (!isSuspicious) {
-    return 'This message appears safe. No significant scam indicators detected.';
-  }
-
-  const recommendations: string[] = [];
-
-  if (severity === 'critical') {
-    recommendations.push('⛔ HIGH RISK: Do not respond or take any action.');
-  } else if (severity === 'high') {
-    recommendations.push('⚠️ WARNING: Exercise extreme caution.');
-  } else {
-    recommendations.push('⚡ CAUTION: This message shows some suspicious signs.');
-  }
-
-  if (keywordResult.matches.some((m: string) => m.includes('gift card') || m.includes('wire transfer'))) {
-    recommendations.push('Never pay with gift cards or wire transfers for legitimate services.');
-  }
-
-  if (keywordResult.matches.some((m: string) => m.includes('password') || m.includes('social security'))) {
-    recommendations.push('Never share passwords or personal information via message.');
-  }
-
-  if (keywordResult.matches.some((m: string) => m.includes('urgent') || m.includes('immediate'))) {
-    recommendations.push('Legitimate organizations rarely demand immediate action.');
-  }
-
-  if (aiResult.isSuspicious) {
-    recommendations.push(`AI Analysis: ${aiResult.reason}`);
-  }
-
-  recommendations.push('When in doubt, contact the organization directly using official contact information.');
-
-  return recommendations.join(' ');
-}
-
-function showNotification(severity: Severity): void {
-  const titles = {
-    low: '⚡ Potential Scam Detected',
-    medium: '⚠️ Suspicious Message Detected',
-    high: '🚨 Warning: Likely Scam',
-    critical: '⛔ DANGER: Scam Detected'
-  };
-
-  const messages = {
-    low: 'This message shows some suspicious signs.',
-    medium: 'This message contains multiple scam indicators.',
-    high: 'This message is very likely a scam attempt.',
-    critical: 'This message is almost certainly a scam. Do not respond!'
-  };
-
+function showNotification(analysis: CombinedAnalysis): void {
+  const title = analysis.overallSeverity === 'critical' 
+    ? '🚨 SCAM ALERT!' 
+    : '⚠️ Suspicious Message Detected';
+  
+  const message = analysis.recommendation;
+  
   chrome.notifications.create({
     type: 'basic',
     iconUrl: 'icons/icon128.png',
-    title: titles[severity],
-    message: messages[severity],
-    priority: severity === 'critical' ? 2 : 1,
-    requireInteraction: severity === 'critical'
-  });
-}
-
-function saveToHistory(analysis: CombinedAnalysis): void {
-  chrome.storage.local.get(['scanHistory'], (result) => {
-    const history: StoredAnalysis[] = result.scanHistory || [];
-    const newEntry: StoredAnalysis = {
-      ...analysis,
-      id: `scan_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-    };
-    
-    history.unshift(newEntry);
-    
-    if (history.length > 100) {
-      history.splice(100);
-    }
-
-    chrome.storage.local.set({ scanHistory: history });
-  });
-}
-
-function updateStats(wasScam: boolean): void {
-  chrome.storage.local.get(['totalScans', 'scamsDetected'], (result) => {
-    const totalScans = (result.totalScans || 0) + 1;
-    const scamsDetected = (result.scamsDetected || 0) + (wasScam ? 1 : 0);
-    
-    chrome.storage.local.set({ totalScans, scamsDetected });
+    title: title,
+    message: message,
+    priority: 2
   });
 }
