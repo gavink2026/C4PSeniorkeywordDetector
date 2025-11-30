@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Scam Detector</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🛡️ Scam Detector</h1>
+      <p>Protect yourself from scams</p>
+    </div>
+    
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="scanner">Scanner</button>
+      <button class="tab-btn" data-tab="history">History</button>
+      <button class="tab-btn" data-tab="settings">Settings</button>
+    </div>
+    
+    <div id="scanner" class="tab-content active">
+      <div class="input-section">
+        <h2>Scan a Message</h2>
+        <textarea id="textInput" placeholder="Paste suspicious message here..." rows="6"></textarea>
+        <button id="analyzeBtn" class="btn-primary">Analyze Message</button>
+      </div>
+      
+      <div id="result" class="result-section">
+        <p class="hint">Select text on any webpage or paste it here to scan for scams</p>
+      </div>
+    </div>
+    
+    <div id="history" class="tab-content">
+      <div class="history-header">
+        <h2>Scan History</h2>
+        <button id="clearHistory" class="btn-secondary">Clear All</button>
+      </div>
+      <div id="historyList" class="history-list"></div>
+    </div>
+    
+    <div id="settings" class="tab-content">
+      <h2>Settings</h2>
+      <div class="settings-section">
+        <h3>AI Configuration</h3>
+        <p class="info-text">Configure your AI API endpoint for enhanced detection</p>
+        <input type="text" id="apiEndpoint" placeholder="API Endpoint URL" class="settings-input">
+        <input type="password" id="apiKey" placeholder="API Key" class="settings-input">
+        <label class="checkbox-label">
+          <input type="checkbox" id="mockMode" checked>
+          Use Mock AI (for testing)
+        </label>
+        <button id="saveSettings" class="btn-primary">Save Settings</button>
+      </div>
+    </div>
+  </div>
+  
+  <script src="popup.js" type="module"></script>
+</body>
+</html>
