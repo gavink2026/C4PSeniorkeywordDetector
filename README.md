@@ -1,5 +1,7 @@
 CONTACT GAVIN/JAY/MOON IF U WANNA COMMIT CHANGES
 
+ASK STAFF IN DISC SERVER FOR the SUMMER MEETING WHERE WE TUTORIALED THIS + the VPN
+
 
 intended for Cyber4Project newcomers. Volunteers should install on computers for seniors using these steps.
 
@@ -54,5 +56,8 @@ The extension will also check text they highlight on websites
 They'll get a notification if something looks dangerous
 All scanning happens on their computer, nothing is sent online
 They can click the shield icon anytime to check a message
+
+
+ASK STAFF IN DISC SERVER FOR the SUMMER MEETING WHERE WE TUTORIALED THIS + the VPN
 
 CONTACT GAVIN/JAY/MOON IF U WANNA COMMIT CHANGES
